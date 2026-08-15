@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Smart Route &amp; ETA Engine - Checkpoint 4</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    /* System font stack, not a CDN font (e.g. Inter) - zero extra network
+       requests, zero render-blocking, zero "the demo looks broken because
+       a CDN was slow/down" failure mode. Every OS this runs on already has
+       a font that looks native and professional here. */
+    :root {
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
+                   sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-5: 24px;
+      --panel-w: 380px;
+      --topbar-h: 60px;
+      --border: #e2e5ea;
+      --bg-page: #f4f5f7;
+      --bg-card: #ffffff;
+      --text: #1a1d23;
+      --text-muted: #6b7280;
+      --accent: #2563eb;
+      --radius: 10px;
+      --shadow: 0 1px 2px rgba(16,24,40,.04), 0 1px 3px rgba(16,24,40,.06);
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; font-family: var(--font-sans); color: var(--text); }
+
+    #topbar {
+      position: absolute; top: 0; left: 0; right: 0; height: var(--topbar-h);
+      background: #111827; color: #fff;
+      display: flex; align-items: center; gap: var(--space-3);
+      padding: 0 var(--space-4);
+      z-index: 1000;
+    }
+    #topbar h1 { font-size: 16px; margin: 0; font-weight: 700; letter-spacing: .2px; white-space: nowrap; }
+    #topbar p { font-size: 12px; margin: 0; color: #9ca3af; }
+
+    #map { position: absolute; top: var(--topbar-h); bottom: 0; left: 0; right: var(--panel-w); }
+    #panel {
+      position: absolute; top: var(--topbar-h); bottom: 0; right: 0; width: var(--panel-w);
+      box-sizing: border-box; padding: var(--space-4);
+      overflow-y: auto; background: var(--bg-page); border-left: 1px solid var(--border);
+    }
+
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: var(--space-4);
+      margin-bottom: var(--space-4);
+    }
+    .card h2 {
+      font-size: 14px; margin: 0 0 var(--space-2);
+      display: flex; align-items: center; gap: var(--space-2);
+    }
+    .step-num {
+      display: inline-flex; align-items: center; justify-content: center; flex: none;
+      width: 20px; height: 20px; border-radius: 50%;
+      background: var(--accent); color: #fff; font-size: 11px; font-weight: 700;
+    }
+    .card p { font-size: 13px; line-height: 1.5; margin: 0 0 var(--space-3); }
+    .card p:last-child { margin-bottom: 0; }
+    .card p.hint { color: var(--text-muted); font-size: 11px; }
+
+    .cmd {
+      font-family: var(--font-mono); font-size: 10px;
+      background: #1f2430; color: #a6e3a1;
+      padding: var(--space-2); border-radius: 6px;
+      white-space: pre-wrap; word-break: break-all;
+    }
+    .status { font-size: 13px; font-weight: 600; }
+    .legend { font-size: 12px; }
+    .legend span { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; }
+
+    button {
+      font-size: 13px; padding: 6px 12px; border-radius: 6px;
+      border: 1px solid var(--border); background: #fff; color: var(--text);
+      font-family: inherit; cursor: pointer;
+    }
+    button:hover:not(:disabled) { background: #f3f4f6; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+
+    /* Cache HIT/MISS color coding - a modifier class toggled in JS
+       alongside the existing `status` class (see reportCacheResult()),
+       purely cosmetic: it doesn't change what triggers it or what's shown. */
+    .cache-hit, .cache-miss {
+      display: block; padding: 6px 10px; border-radius: 6px; font-size: 13px;
+    }
+    .cache-hit { background: #e9f9ef; border-left: 3px solid #1e9e50; color: #166534; }
+    .cache-miss { background: #fff4e5; border-left: 3px solid #d97706; color: #92400e; }
+
+    pre#cacheStats {
+      font-family: var(--font-mono); font-size: 11px;
+      background: var(--bg-page); border: 1px solid var(--border);
+      padding: var(--space-2); border-radius: 6px; margin: 0;
+    }
+
+    details.cli-toggle summary {
+      cursor: pointer; font-size: 12px; color: var(--accent); font-weight: 600;
+      list-style: none;
+    }
+    details.cli-toggle summary::-webkit-details-marker { display: none; }
+    details.cli-toggle summary::before { content: "▸ "; }
+    details.cli-toggle[open] summary::before { content: "▾ "; }
+    details.cli-toggle .cmd { margin-top: var(--space-2); }
+  </style>
+</head>
+<body>
+  <header id="topbar">
+    <h1>Smart Route &amp; ETA Engine</h1>
+    <p>Interactive routing demo on real OpenStreetMap data for Bhubaneswar, India</p>
+  </header>
+  <div id="map"></div>
+  <div id="panel">
+    <section class="card">
+      <h2><span class="step-num">1</span> Pick two points</h2>
+      <p>Click the map twice: first click = start, second click = end. Every
+         button below (sections 2-4) fires a fresh computation for whatever
+         pair you picked, via the dev server's <code>/compute</code> or
+         <code>/compute_k</code> endpoints - see
+         <code>scripts/dev_server.py</code>. Tip: pick points a few km apart
+         for a snappy demo - Dijkstra animates one marker per node expanded,
+         and very distant pairs can expand thousands of nodes.</p>
+      <p class="status" id="status">Click a start point...</p>
+    </section>
+
+    <section class="card">
+      <h2><span class="step-num">2</span> Single route</h2>
+      <p>Computes the A*/distance route for the two points above.</p>
+      <p><button id="reload" disabled>Compute + show route</button></p>
+      <p id="routeInfo"></p>
+    </section>
+
+    <section class="card">
+      <h2><span class="step-num">3</span> Search visualization demo</h2>
+      <p>Runs Dijkstra, A*, and bidirectional Dijkstra on the <em>same</em>
+         two points and animates all three searches <strong>at the same
+         time</strong>, side by side:
+         <span class="legend"><span style="background:#e67e22"></span>Dijkstra</span>
+         &nbsp;
+         <span class="legend"><span style="background:#16a085"></span>A*</span>
+         &nbsp;
+         <span class="legend"><span style="background:#8e44ad"></span>Bidirectional Dijkstra</span>
+         - watch bidirectional Dijkstra's wave grow from <em>both</em> ends
+         at once and meet in the middle, instead of spreading from just one
+         point.
+      </p>
+      <p><button id="playDemo" disabled>Play demo (Dijkstra vs A* vs Bidirectional)</button></p>
+      <p class="status" id="demoStatus"></p>
+    </section>
+
+    <section class="card">
+      <h2><span class="step-num">4</span> K-shortest validated routes</h2>
+      <p>Runs Yen's algorithm for the top K distinct routes between the two
+         points above, then discards any that fail the validation chain
+         (closed roads / sanity bounds / reachability) - see NOTES.md.</p>
+      <p>
+        K = <select id="kValue"><option value="1" selected>1</option><option value="2">2</option><option value="3">3</option></select>
+        <button id="showKRoutes" disabled>Show K routes</button>
+      </p>
+      <p class="status" id="kStatus"></p>
+      <p id="kRoutesInfo"></p>
+    </section>
+
+    <section class="card">
+      <h2><span class="step-num">5</span> Live road conditions</h2>
+      <p>Turn on edit mode, then click <em>near a road</em> to mark it. The
+        change applies immediately - no server restart, no re-export. Marked
+        roads are sent to the engine on every subsequent route computation.</p>
+      <p>
+        <label><input type="checkbox" id="conditionsMode"> <strong>Edit mode</strong> (map clicks mark roads)</label>
+      </p>
+      <p>
+        Mark as:
+        <select id="conditionKind">
+          <option value="closed" selected>Closed (impassable)</option>
+          <option value="congested">Congested</option>
+        </select>
+        <span id="multiplierWrap" style="display:none">
+          &times;<input type="number" id="conditionMultiplier" value="3" min="1" step="0.5" style="width:52px">
+        </span>
+      </p>
+      <p>
+        <button id="clearConditions">Clear all conditions</button>
+        <span class="legend" style="margin-left:6px"><span style="background:#c0392b"></span>closed</span>
+        <span class="legend"><span style="background:#d35400"></span>congested</span>
+      </p>
+      <p class="status" id="conditionsStatus">No conditions set.</p>
+    </section>
+
+    <section class="card">
+      <h2><span class="step-num">6</span> Route cache</h2>
+      <p>Results are cached in the dev server, keyed by
+        (start node, end node, algo, weight, k). Marking a road evicts only
+        the cached routes that actually drive down it.</p>
+      <p class="status" id="cacheStatus">-</p>
+      <p><button id="refreshCacheStats">Refresh cache stats</button></p>
+      <pre id="cacheStats"></pre>
+    </section>
+
+    <section class="card">
+      <details class="cli-toggle">
+        <summary>Show CLI equivalent</summary>
+        <p class="hint">Equivalent CLI command, if you'd rather run the engine
+          directly instead of through the dev server:</p>
+        <div class="cmd" id="cmdRef">(waiting for two clicks)</div>
+      </details>
+    </section>
+  </div>
+
+  <script>
+    const map = L.map('map', { preferCanvas: true }).setView([20.2961, 85.8245], 13); // Bhubaneswar
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    let startPoint = null;
+    let endPoint = null;
+    let demoRunning = false;
+
+    // Four named layer groups are the map's entire mutable state, and
+    // .clearLayers() on the relevant ones is the *only* way anything gets
+    // removed - never a bare map.removeLayer() on a tracked variable. That's
+    // what keeps "current state" actually meaning current state: every
+    // button/click handler below clears exactly the groups its own doc
+    // comment says it clears, so nothing from a previous pair or a
+    // previous button-press can survive a redraw.
+    const markerLayer = L.layerGroup().addTo(map);   // start/end pin markers
+    const routeLayer = L.layerGroup().addTo(map);    // the single-route polyline
+    const traceLayer = L.layerGroup().addTo(map);    // demo wave markers + all three final route lines
+    const kRoutesLayer = L.layerGroup().addTo(map);  // checkpoint 4: K validated route polylines
+
+    // checkpoint 5: marked closed/congested roads. Deliberately NOT one of
+    // the "result" layers below - these represent *server state* (the live
+    // conditions set), not the output of the last button press, so they
+    // must survive every route redraw. It's only redrawn from
+    // GET /conditions, never cleared as a side effect of routing.
+    const conditionsLayer = L.layerGroup().addTo(map);
+
+    // The three "result" layers (everything except markers and conditions)
+    // - every button that draws a result clears all three of these first,
+    // regardless of which one(s) it's about to repopulate, so switching
+    // between "single route", "play demo", and "K routes" for the same pair
+    // never leaves a previous button's output on screen.
+    function clearRouteLayers() {
+      routeLayer.clearLayers();
+      traceLayer.clearLayers();
+      kRoutesLayer.clearLayers();
+    }
+
+    function sleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    function updateUiForPoints() {
+      const statusEl = document.getElementById('status');
+      const cmdEl = document.getElementById('cmdRef');
+      const ready = !!(startPoint && endPoint);
+      document.getElementById('reload').disabled = !ready;
+      document.getElementById('playDemo').disabled = !ready;
+      document.getElementById('showKRoutes').disabled = !ready;
+
+      if (startPoint && !endPoint) {
+        statusEl.textContent = 'Now click an end point...';
+      } else if (ready) {
+        statusEl.textContent = 'Ready.';
+        const s = `${startPoint.lat.toFixed(6)} ${startPoint.lng.toFixed(6)}`;
+        const e = `${endPoint.lat.toFixed(6)} ${endPoint.lng.toFixed(6)}`;
+        cmdEl.textContent =
+          `cpp\\build\\route_engine.exe data\\nodes.csv data\\edges.csv ${s} ${e} frontend\\route.json ` +
+          `--algo=both --trace=frontend\\steps.json`;
+      }
+    }
+
+    map.on('click', (e) => {
+      // checkpoint 5: in edit mode a click marks a road instead of picking
+      // route endpoints - the two interactions share the map, so the mode
+      // toggle decides which one a click means.
+      if (document.getElementById('conditionsMode').checked) {
+        markRoadAt(e.latlng);
+        return;
+      }
+      if (!startPoint || (startPoint && endPoint)) {
+        // Starting a fresh pair: everything on screen belonged to the
+        // previous pair (or nothing was picked yet), so all four layers
+        // clear immediately - markers included, since we're about to place
+        // a brand new start marker anyway.
+        markerLayer.clearLayers();
+        clearRouteLayers();
+        endPoint = null;
+        startPoint = e.latlng;
+        L.marker(startPoint, { title: 'start' }).addTo(markerLayer);
+      } else {
+        endPoint = e.latlng;
+        L.marker(endPoint, { title: 'end' }).addTo(markerLayer);
+      }
+      updateUiForPoints();
+    });
+
+    // Hits the dev server's /compute endpoint, which runs
+    // route_engine.exe --algo=both --trace=... for the given points and
+    // (re)writes route_{dijkstra,astar,bidijkstra}.json and
+    // steps_{dijkstra,astar,bidijkstra}.json fresh. Throws with a readable
+    // message on failure (dev server not running, engine crashed, etc.) so
+    // callers can show it.
+    async function computeForCurrentPoints() {
+      if (!startPoint || !endPoint) throw new Error('Pick a start and end point first.');
+      const params = new URLSearchParams({
+        start_lat: startPoint.lat, start_lon: startPoint.lng,
+        end_lat: endPoint.lat, end_lon: endPoint.lng,
+      });
+      const res = await fetch(`/compute?${params}`, { cache: 'no-store' });
+      let body;
+      try { body = await res.json(); } catch { body = {}; }
+      if (!res.ok || !body.ok) {
+        throw new Error(body.error || `/compute failed (HTTP ${res.status}). Is scripts/dev_server.py running?`);
+      }
+      reportCacheResult(body);
+      refreshCacheStats();
+    }
+
+    async function loadRoute() {
+      const infoEl = document.getElementById('routeInfo');
+      const btn = document.getElementById('reload');
+      btn.disabled = true;
+
+      // Clear any previous result (route line, demo trace, or K routes) up
+      // front, not just on success - markers are left alone, per spec,
+      // since they represent the pair we're about to compute for.
+      clearRouteLayers();
+
+      try {
+        infoEl.textContent = 'Computing...';
+        await computeForCurrentPoints();
+
+        const res = await fetch('route_astar.json', { cache: 'no-store' });
+        if (!res.ok) throw new Error('route_astar.json not found');
+        const data = await res.json();
+
+        if (!data.path_found) {
+          infoEl.textContent = 'No path found between those two points.';
+          return;
+        }
+        const line = L.polyline(data.coordinates, { color: 'blue', weight: 4 }).addTo(routeLayer);
+        map.fitBounds(line.getBounds(), { padding: [20, 20] });
+        infoEl.textContent = `Route: ${data.coordinates.length} points, ${(data.distance_m / 1000).toFixed(2)} km`;
+      } catch (err) {
+        infoEl.textContent = err.message;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    document.getElementById('reload').addEventListener('click', loadRoute);
+
+    // --- Checkpoint 3: search visualization demo ---
+
+    // Drops one small circle marker per visited node, `delayMs` apart, so
+    // the search order becomes a watchable "wave" instead of an instant
+    // scatter of dots. Each call is independent (its own layer, its own
+    // timer loop) - running two of these concurrently via Promise.all is
+    // what makes Dijkstra and A* animate side by side instead of one
+    // waiting for the other.
+    async function animateSteps(coords, layer, color, delayMs, onStep) {
+      for (let i = 0; i < coords.length; i++) {
+        const [lat, lon] = coords[i];
+        L.circleMarker([lat, lon], { radius: 3, color, fillColor: color, fillOpacity: 0.7, weight: 0 }).addTo(layer);
+        if (onStep) onStep(i + 1, coords.length);
+        await sleep(delayMs);
+      }
+    }
+
+    async function playDemo() {
+      if (demoRunning) return;
+      demoRunning = true;
+      const btn = document.getElementById('playDemo');
+      const statusEl = document.getElementById('demoStatus');
+      btn.disabled = true;
+
+      // Clear any previous result up front - markers are left alone, per spec.
+      clearRouteLayers();
+
+      try {
+        statusEl.textContent = 'Computing (running Dijkstra + A* + Bidirectional Dijkstra)...';
+        await computeForCurrentPoints();
+
+        const [dijSteps, dijRoute, astSteps, astRoute, bidijSteps, bidijRoute] = await Promise.all([
+          fetch('steps_dijkstra.json', { cache: 'no-store' }).then((r) => r.json()),
+          fetch('route_dijkstra.json', { cache: 'no-store' }).then((r) => r.json()),
+          fetch('steps_astar.json', { cache: 'no-store' }).then((r) => r.json()),
+          fetch('route_astar.json', { cache: 'no-store' }).then((r) => r.json()),
+          fetch('steps_bidijkstra.json', { cache: 'no-store' }).then((r) => r.json()),
+          fetch('route_bidijkstra.json', { cache: 'no-store' }).then((r) => r.json()),
+        ]);
+
+        // Frame the viewport once, up front, on the union of all three final
+        // routes plus the two clicked points - so the map doesn't jump
+        // around mid-animation while the waves are spreading.
+        const boundsPoints = [[startPoint.lat, startPoint.lng], [endPoint.lat, endPoint.lng]]
+          .concat(dijRoute.path_found ? dijRoute.coordinates : [])
+          .concat(astRoute.path_found ? astRoute.coordinates : [])
+          .concat(bidijRoute.path_found ? bidijRoute.coordinates : []);
+        map.fitBounds(L.latLngBounds(boundsPoints), { padding: [30, 30] });
+
+        const DELAY_MS = 15;
+        let dijDone = 0, astDone = 0, bidijDone = 0;
+        const updateStatus = () => {
+          statusEl.textContent =
+            `Dijkstra: ${dijDone}/${dijSteps.steps.length} expanded  |  ` +
+            `A*: ${astDone}/${astSteps.steps.length} expanded  |  ` +
+            `Bidirectional: ${bidijDone}/${bidijSteps.steps.length} expanded`;
+        };
+        updateStatus();
+
+        // The whole point of the checkpoint 3 fix this reuses: all three
+        // loops are started together and awaited together, so they
+        // interleave on the event loop instead of one running to
+        // completion before the next starts. bidijkstra's own steps array
+        // already interleaves forward (near-start) and backward (near-end)
+        // expansions - see NOTES.md - so animating it in order, in one
+        // color, is what actually produces the "two waves meeting in the
+        // middle" visual; no separate forward/backward split is needed.
+        await Promise.all([
+          animateSteps(dijSteps.steps, traceLayer, '#e67e22', DELAY_MS, (done) => { dijDone = done; updateStatus(); })
+            .then(() => {
+              if (dijRoute.path_found) {
+                L.polyline(dijRoute.coordinates, { color: '#e67e22', weight: 3, opacity: 0.85 }).addTo(traceLayer);
+              }
+            }),
+          animateSteps(astSteps.steps, traceLayer, '#16a085', DELAY_MS, (done) => { astDone = done; updateStatus(); })
+            .then(() => {
+              if (astRoute.path_found) {
+                L.polyline(astRoute.coordinates, { color: 'blue', weight: 5 }).addTo(traceLayer);
+              }
+            }),
+          animateSteps(bidijSteps.steps, traceLayer, '#8e44ad', DELAY_MS, (done) => { bidijDone = done; updateStatus(); })
+            .then(() => {
+              if (bidijRoute.path_found) {
+                // Dashed, so it's still visible even when it lands exactly
+                // on top of dijkstra's/astar's line - which it usually
+                // does, since all three find the same-cost optimal route.
+                L.polyline(bidijRoute.coordinates, { color: '#8e44ad', weight: 4, dashArray: '8,6', opacity: 0.9 })
+                  .addTo(traceLayer);
+              }
+            }),
+        ]);
+
+        const astCut = (100 * (1 - astSteps.steps.length / dijSteps.steps.length)).toFixed(0);
+        const bidijCut = (100 * (1 - bidijSteps.steps.length / dijSteps.steps.length)).toFixed(0);
+        statusEl.textContent = `Done. Dijkstra expanded ${dijSteps.steps.length} nodes (orange), ` +
+          `A* expanded ${astSteps.steps.length} nodes (teal, ${astCut}% fewer), ` +
+          `Bidirectional Dijkstra expanded ${bidijSteps.steps.length} nodes (purple, ${bidijCut}% fewer). ` +
+          `All three found the same-cost route.`;
+      } catch (err) {
+        statusEl.textContent = err.message;
+      } finally {
+        btn.disabled = false;
+        demoRunning = false;
+      }
+    }
+
+    document.getElementById('playDemo').addEventListener('click', playDemo);
+
+    // --- Checkpoint 4: K-shortest validated routes ---
+
+    const K_ROUTE_COLORS = ['#e74c3c', '#3498db', '#2ecc71', '#9b59b6', '#f39c12'];
+
+    async function showKRoutes() {
+      const btn = document.getElementById('showKRoutes');
+      const statusEl = document.getElementById('kStatus');
+      const infoEl = document.getElementById('kRoutesInfo');
+      btn.disabled = true;
+      infoEl.innerHTML = '';
+
+      // Clear any previous result up front - markers are left alone, per spec.
+      clearRouteLayers();
+
+      try {
+        if (!startPoint || !endPoint) throw new Error('Pick a start and end point first.');
+        const k = document.getElementById('kValue').value;
+        statusEl.textContent = `Computing top ${k} validated routes (Yen's algorithm + validation chain)...`;
+
+        const params = new URLSearchParams({
+          start_lat: startPoint.lat, start_lon: startPoint.lng,
+          end_lat: endPoint.lat, end_lon: endPoint.lng,
+          k, algo: 'astar',
+        });
+        const res = await fetch(`/compute_k?${params}`, { cache: 'no-store' });
+        let body;
+        try { body = await res.json(); } catch { body = {}; }
+        if (!res.ok || !body.ok) {
+          throw new Error(body.error || `/compute_k failed (HTTP ${res.status}). Is scripts/dev_server.py running?`);
+        }
+        reportCacheResult(body);
+        refreshCacheStats();
+
+        const data = await (await fetch('route_k.json', { cache: 'no-store' })).json();
+
+        // k=1 goes through the engine's original single-route code path
+        // (main.cpp takes the `if (k > 1)` branch only for k>1, by design -
+        // see NOTES.md), which writes the checkpoint 1-3 shape
+        // ({path_found, coordinates, ...}) rather than a `routes` array.
+        // Normalize that into a one-element array here so everything below
+        // doesn't need to special-case k=1.
+        const routes = data.routes ? data.routes : (data.path_found ? [data] : []);
+
+        if (!data.path_found || routes.length === 0) {
+          statusEl.textContent = 'No valid route found between those two points.';
+          return;
+        }
+
+        // Distinct color per route, drawn thickest-first so the "best"
+        // route's line isn't hidden under the others where they overlap.
+        const allCoords = [];
+        routes.forEach((route, i) => {
+          const color = K_ROUTE_COLORS[i % K_ROUTE_COLORS.length];
+          L.polyline(route.coordinates, { color, weight: 6 - i, opacity: 0.85 }).addTo(kRoutesLayer);
+          allCoords.push(...route.coordinates);
+        });
+        map.fitBounds(L.latLngBounds(allCoords), { padding: [30, 30] });
+
+        infoEl.innerHTML = routes.map((r, i) => {
+          const color = K_ROUTE_COLORS[i % K_ROUTE_COLORS.length];
+          return `<span class="legend"><span style="background:${color}"></span>` +
+            `Route ${i + 1}: ${(r.distance_m / 1000).toFixed(2)} km</span>`;
+        }).join('<br>');
+
+        // k_requested/candidates_considered/candidates_rejected only exist
+        // on the multi-route shape; k=1's single-route shape has none of
+        // them, so fall back to values that describe that case honestly.
+        const kRequested = data.k_requested !== undefined ? data.k_requested : 1;
+        const considered = data.candidates_considered !== undefined ? data.candidates_considered : 1;
+        const rejected = data.candidates_rejected !== undefined ? data.candidates_rejected : 0;
+        statusEl.textContent = `Showing ${routes.length}/${kRequested} requested route(s) - ` +
+          `${considered} candidate(s) considered, ${rejected} rejected by validation.`;
+      } catch (err) {
+        statusEl.textContent = err.message;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    document.getElementById('showKRoutes').addEventListener('click', showKRoutes);
+
+    // --- Checkpoint 5: live road conditions + route cache ---
+
+    // Reports whether the last computation was served from the LRU cache,
+    // and how long it took. This is the visible payoff of checkpoint 5:
+    // the same query, clicked twice, goes from ~800ms to ~90ms.
+    //
+    // The classList toggle below is a purely cosmetic addition (green for
+    // HIT, amber for MISS) on top of the existing `status` class - it
+    // doesn't change what triggers this function, what data it receives,
+    // or what text it shows, only how that text is highlighted.
+    function reportCacheResult(body) {
+      const el = document.getElementById('cacheStatus');
+      el.classList.remove('cache-hit', 'cache-miss');
+      if (!body || typeof body.cached === 'undefined') { el.textContent = '-'; return; }
+      el.textContent = body.cached
+        ? `Cache HIT - served in ${body.elapsed_ms} ms (no engine subprocess run)`
+        : `Cache MISS - computed in ${body.elapsed_ms} ms (ran route_engine.exe)`;
+      el.classList.add(body.cached ? 'cache-hit' : 'cache-miss');
+    }
+
+    async function refreshCacheStats() {
+      const el = document.getElementById('cacheStats');
+      try {
+        const res = await fetch('/cache/stats', { cache: 'no-store' });
+        const body = await res.json();
+        const s = body.cache;
+        // The timestamp is not decoration: this panel is also populated on
+        // page load, so a manual refresh that happens to return identical
+        // numbers would otherwise produce no visible change at all and the
+        // button would look broken. A always-changing "refreshed at" line
+        // is the evidence that the click did something.
+        const now = new Date().toLocaleTimeString();
+        el.textContent =
+          `entries      ${s.entries}/${s.max_entries}\n` +
+          `hits/misses  ${s.hits}/${s.misses}` + (s.hit_rate !== null ? `  (hit rate ${s.hit_rate})` : '') + `\n` +
+          `evicted LRU  ${s.evictions_lru}\n` +
+          `invalidated  ${s.evictions_invalidated}\n` +
+          `flushes      ${s.flushes}\n` +
+          `approx size  ${(s.approx_bytes / 1024).toFixed(0)} KB\n` +
+          `refreshed    ${now}`;
+      } catch (err) {
+        el.textContent = `cache stats unavailable (${err.message})\n` +
+          `is scripts/dev_server.py running?`;
+      }
+    }
+
+    function drawConditions(conditions) {
+      conditionsLayer.clearLayers();
+      const seen = new Set();
+      for (const c of conditions) {
+        // Both directions of one street are separate edges but the same
+        // line on screen - draw each geometry once.
+        const geoKey = [c.u, c.v].sort().join('-');
+        if (seen.has(geoKey)) continue;
+        seen.add(geoKey);
+        const coords = conditionGeometry[`${c.u}-${c.v}`] || conditionGeometry[`${c.v}-${c.u}`];
+        if (!coords) continue;
+        L.polyline(coords, {
+          color: c.kind === 'closed' ? '#c0392b' : '#d35400',
+          weight: 7, opacity: 0.9,
+          dashArray: c.kind === 'congested' ? '10,6' : null,
+        }).addTo(conditionsLayer);
+      }
+      const el = document.getElementById('conditionsStatus');
+      el.textContent = conditions.length
+        ? `${conditions.length} condition(s) active - applied to every route computed from now on.`
+        : 'No conditions set.';
+    }
+
+    // Geometry for marked edges, keyed "u-v". The server returns the
+    // endpoint coords when marking; we remember them so conditions can be
+    // redrawn without asking the server for geometry again.
+    const conditionGeometry = {};
+
+    async function markRoadAt(latlng) {
+      const kind = document.getElementById('conditionKind').value;
+      const multiplier = parseFloat(document.getElementById('conditionMultiplier').value) || 3.0;
+      const statusEl = document.getElementById('conditionsStatus');
+      statusEl.textContent = 'Marking road...';
+      try {
+        const res = await fetch('/conditions/mark', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ lat: latlng.lat, lon: latlng.lng, kind, multiplier }),
+        });
+        const body = await res.json();
+        if (!res.ok || !body.ok) throw new Error(body.error || 'could not mark that road');
+
+        for (const e of body.edges) {
+          conditionGeometry[`${e.u}-${e.v}`] = [body.u_coord, body.v_coord];
+        }
+        drawConditions(body.conditions);
+
+        const inv = body.invalidation;
+        statusEl.textContent =
+          `Marked ${body.kind}${body.multiplier ? ' x' + body.multiplier : ''} ` +
+          `(${body.distance_m} m from click). Cache ${inv.mode}: ` +
+          `dropped ${inv.entries_dropped}` +
+          (inv.mode === 'precise' ? `, kept ${inv.entries_kept}` : '') + '.';
+        refreshCacheStats();
+      } catch (err) {
+        statusEl.textContent = err.message;
+      }
+    }
+
+    async function loadConditions() {
+      try {
+        const res = await fetch('/conditions', { cache: 'no-store' });
+        const body = await res.json();
+        drawConditions(body.conditions || []);
+      } catch (err) { /* server may not be running - fine */ }
+    }
+
+    document.getElementById('conditionKind').addEventListener('change', (e) => {
+      document.getElementById('multiplierWrap').style.display =
+        e.target.value === 'congested' ? 'inline' : 'none';
+    });
+
+    document.getElementById('clearConditions').addEventListener('click', async () => {
+      const statusEl = document.getElementById('conditionsStatus');
+      try {
+        const res = await fetch('/conditions/clear', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+        });
+        const body = await res.json();
+        conditionsLayer.clearLayers();
+        statusEl.textContent =
+          `Cleared ${body.cleared} condition(s). Cache ${body.invalidation.mode}: ` +
+          `dropped ${body.invalidation.entries_dropped} (a relaxation can't use precise eviction - see NOTES.md).`;
+        refreshCacheStats();
+      } catch (err) {
+        statusEl.textContent = err.message;
+      }
+    });
+
+    document.getElementById('refreshCacheStats').addEventListener('click', refreshCacheStats);
+
+    loadConditions();
+    refreshCacheStats();
+
+    // On page load, try showing whatever route_astar.json already exists
+    // (e.g. from a previous session) without forcing a compute - there's no
+    // start/end picked yet to compute from.
+    (async () => {
+      try {
+        const res = await fetch('route_astar.json', { cache: 'no-store' });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.path_found) {
+          const line = L.polyline(data.coordinates, { color: 'blue', weight: 4 }).addTo(routeLayer);
+          map.fitBounds(line.getBounds(), { padding: [20, 20] });
+          document.getElementById('routeInfo').textContent =
+            `Route: ${data.coordinates.length} points, ${(data.distance_m / 1000).toFixed(2)} km (from a previous run)`;
+        }
+      } catch (err) { /* nothing on disk yet - fine */ }
+    })();
+  </script>
+</body>
+</html>

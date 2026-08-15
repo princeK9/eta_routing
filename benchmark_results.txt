@@ -1,0 +1,79 @@
+Smart Route & ETA Engine -- Dijkstra vs A* vs Bidirectional Dijkstra Benchmark
+Graph: Bhubaneswar, India -- 40111 nodes, 98211 directed edges
+Random seed: 42 (reproducible pair selection)
+Generated: 2026-08-14 20:30:02
+
+=== Weight strategy: distance (cost in meters) ===
+
+#      source   target     dij_cost     ast_cost   bidij_cost  match     dij_exp     ast_exp    bidij_exp    dij_us    ast_us   bidij_us
+----------------------------------------------------------------------------------------------------------------------------------------
+1       15023    31950     18461.73     18461.73     18461.73    yes       11712        1576         4949    2108.9    1560.5     1537.3
+2       38134     7357     17052.51     17052.51     17052.51    yes       14436        4318        19511    2570.3    3711.6     4548.1
+3       29361    31274     11007.08     11007.08     11007.08    yes        6267        1895         7181    1361.0    1564.0     1704.5
+4       24012    23940      2506.23      2506.23      2506.23    yes        1653         124          908     444.6     459.9      855.2
+5        6258    17882     11619.30     11619.30     11619.30    yes       20797        6272        14320    3605.8    4650.6     3355.9
+6        6257     4010      9248.12      9248.12      9248.12    yes       15224        3825         9168    2609.0    2688.4     2209.0
+7        2329    18420      6593.73      6593.73      6593.73    yes        8163        1311         2224    1554.1    1016.9      968.3
+8       34743    13385     12552.52     12552.52     12552.52    yes       25631        6575        10977    4654.3    5037.9     2444.2
+9       24111     5730     20928.64     20928.64     20928.64    yes        7835        1436        18784    1257.6     996.4     3957.5
+10      28401    26107     16827.88     16827.88     16827.88    yes       17113        2602        18566    3454.4    1678.7     3746.1
+11        825     2262      9621.31      9621.31      9621.31    yes       17499        3711        11536    3038.8    2481.9     2617.0
+12      38904    28960     21533.54     21533.54     21533.54    yes       21757        5995        20486    3822.2    4417.1     3845.1
+13      33390    37646      9083.52      9083.52      9083.52    yes       16290        3412         9666    4498.5    5468.3     3841.0
+14       8517       31      9749.34      9749.34      9749.35    yes       11114        2088        10570    3505.8    3595.7     3925.7
+15       7293    39798      6108.91      6108.91      6108.91    yes        7435        1297         3214    2390.8    1749.2     1344.6
+16       7356    24767     11644.35     11644.35     11644.35    yes       23770        7178        11308    7722.7    9907.6     3984.6
+17      12203    24534     22461.19     22461.19     22461.19    yes       30825       10930        16478   10194.6   17044.7     6147.5
+18      21048      283     30966.74     30966.74     30966.74    yes       12333        4902        31489    3567.3    6989.4    12345.1
+----------------------------------------------------------------------------------------------------------------------------------------
+Averages over 18 runs:
+  nodes expanded:  dijkstra=14992   astar=3858 (74.3% fewer than dijkstra)   bidijkstra=12296 (18.0% fewer than dijkstra)
+  time:            dijkstra=3464.5 us   astar=4167.7 us (0.83x)   bidijkstra=3520.9 us (0.98x)
+  cost agreement:  18/18 runs where dijkstra/astar/bidijkstra all found the same-cost optimal path
+
+=== Weight strategy: time (cost in seconds) ===
+
+#      source   target     dij_cost     ast_cost   bidij_cost  match     dij_exp     ast_exp    bidij_exp    dij_us    ast_us   bidij_us
+----------------------------------------------------------------------------------------------------------------------------------------
+1       15023    31950      1306.52      1306.52      1306.52    yes       15727        2606         3737    5243.9    3449.2     1403.7
+2       38134     7357      1268.73      1268.73      1268.73    yes       13292        6883        16585    4436.1   10572.3     6762.9
+3       29361    31274       725.55       725.55       725.55    yes        5503        2999         3811    1751.4    4588.2     1412.5
+4       24012    23940       248.66       248.66       248.66    yes        1670         551          812     492.7     876.6      320.4
+5        6258    17882      1013.35      1013.35      1013.35    yes       23211       12011        13998    8625.7   19679.4     5814.4
+6        6257     4010       942.52       942.52       942.52    yes       20820       10800        11332    7468.1   15178.4     3933.2
+7        2329    18420       714.16       714.16       714.16    yes       11672        4569         2521    4007.2    6596.0      856.2
+8       34743    13385       957.64       957.64       957.64    yes       25228       10017         8653    9364.8   16177.8     3431.7
+9       24111     5730      2083.88      2083.88      2083.88    yes        7654        3749        26992    2452.4    5474.5    10903.0
+10      28401    26107      1549.65      1549.65      1549.65    yes       17851        7129        22639    6409.1   10510.8     8984.1
+11        825     2262       790.60       790.60       790.60    yes       18499        7766        10009    6056.3   11496.3     3719.2
+12      38904    28960      1663.45      1663.45      1663.45    yes       30139       17217        19935   10762.2   27846.7     9585.3
+13      33390    37646       677.49       677.49       677.49    yes       14443        6335         8191    5529.6    9182.4     3164.0
+14       8517       31       866.12       866.12       866.12    yes       11297        5073        11494    3702.4    6897.7     4251.9
+15       7293    39798       501.16       501.16       501.16    yes        8095        2109         2488    2580.0    3087.1     1012.0
+16       7356    24767      1004.64      1004.64      1004.64    yes       26773       13360        10725   10572.5   20347.0     4211.6
+17      12203    24534      1854.33      1854.33      1854.33    yes       31699       18196        15370   12166.4   26039.5     5824.5
+18      21048      283      2413.24      2413.24      2413.24    yes       10155        5887        31228    3337.8    8804.0    12810.2
+----------------------------------------------------------------------------------------------------------------------------------------
+Averages over 18 runs:
+  nodes expanded:  dijkstra=16318   astar=7625 (53.3% fewer than dijkstra)   bidijkstra=12251 (24.9% fewer than dijkstra)
+  time:            dijkstra=5831.0 us   astar=11489.1 us (0.51x)   bidijkstra=4911.2 us (1.19x)
+  cost agreement:  18/18 runs where dijkstra/astar/bidijkstra all found the same-cost optimal path
+
+Notes:
+- The percentages in "Averages" are how many fewer nodes astar/bidijkstra expanded vs
+  dijkstra to solve the same query.
+- All three algorithms stop as soon as the search is provably done (target popped for
+  dijkstra/astar; frontiers can't improve the best meeting point for bidijkstra) rather
+  than running to completion over the whole graph, so nodes_expanded reflects real work
+  done per query, not a fixed cost proportional to graph size.
+- The "(Nx)" figures next to astar/bidijkstra's average time are wall-clock speedup vs
+  dijkstra (dijkstra_us / that algorithm's us), from the same process/run.
+- *_us columns are each the mean of 25 repeated runs of that exact query, not a single
+  timing - this toolchain's steady_clock has ~1ms resolution, too coarse to time one
+  sub-millisecond query directly, so timings are averaged to rise above that noise floor.
+- nodes_expanded is exact (not timing-dependent) and is the more reliable metric here:
+  wall-clock speedup can be inconsistent or even negative despite large node-count cuts,
+  because astar pays a real per-node cost (a haversine heuristic call per relaxed edge)
+  that dijkstra doesn't, and bidijkstra pays for running two priority queues and a
+  meeting check instead of one - the win only shows up on the clock once the nodes saved
+  outweigh that per-node overhead. See NOTES.md for the full discussion.

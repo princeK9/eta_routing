@@ -1,0 +1,11 @@
+.claude/
+.vscode/
+cpp/build/
+scratch*/
+__pycache__/
+*.pyc
+.venv/
+NOTES.md
+data/*.csv
+frontend/route*.json
+frontend/steps_*.json
