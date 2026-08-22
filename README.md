@@ -16,6 +16,8 @@ Interactive routing engine over real OpenStreetMap data for Bhubaneswar, India �
 
 The browser (Leaflet + vanilla JS, no framework) talks only to a single-threaded Python `dev_server.py`, which serves the static frontend and exposes `/compute`, `/compute_k`, `/conditions`, and `/cache/stats`. On each routing request it snaps the clicked lat/lon to a graph node itself, checks its own in-process LRU cache, and on a miss shells out to `route_engine.exe` as a one-shot subprocess — passing any live closed/congested edges — and reads back the JSON route it writes to disk. The split exists because the Python and C++ halves are genuinely separate toolchains that only need to agree on a file format (CSV in, JSON out): the C++ side stays a stateless, testable, one-shot computation engine, while all the mutable state (cache, live conditions, HTTP handling) lives in Python.
 
+### Architecture diagram
+
 ```mermaid
 flowchart TD
     A[Browser<br/>Leaflet + vanilla JS] -->|HTTP| B[Python dev_server.py<br/>single-threaded]
