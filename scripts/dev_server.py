@@ -21,6 +21,14 @@ Endpoints
     POST /conditions/mark       {lat, lon, kind: closed|congested, multiplier}
     POST /conditions/clear
     GET  /cache/stats           -> hit/miss/eviction counters
+    GET  /route_status          -> was the displayed route affected by a conditions change since it was drawn
+    POST /route_status/register {start_lat, start_lon, end_lat, end_lon} -> records the currently displayed route
+
+Checkpoint 6 adds auto-reroute: the frontend polls /route_status every few
+seconds, and /route_status answers by reusing the exact eviction result the
+cache invalidation above already computes on every conditions change -
+no separate edge_path-membership check is written for this. See
+DISPLAYED_ROUTE below and NOTES.md.
 
 THREADING: this uses a single-threaded HTTPServer on purpose. The cache and
 conditions store are not concurrency-safe (see route_cache.py), so the
@@ -67,6 +75,15 @@ COMPUTE_FILES = COMPUTE_ROUTE_FILES + COMPUTE_STEP_FILES
 GRAPH = None
 CONDITIONS = LiveConditions()
 CACHE = LruRouteCache()
+
+# Checkpoint 6: the one route currently drawn on the map, registered by the
+# frontend via POST /route_status/register right after every successful
+# compute (manual click or auto-reroute's own recompute alike). "affected"
+# is flipped to True only by the cache-invalidation code below, reusing the
+# keys it already computed - not a second membership check against this
+# route's own edge path. "key" mirrors the cache key shape used for the
+# single-route /compute endpoint: (start_node, end_node, "both", "distance", 1).
+DISPLAYED_ROUTE = {"key": None, "affected": False, "reason": None}
 
 
 def read_frontend_files(names):
@@ -115,6 +132,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_json(200, {"ok": True, "conditions": CONDITIONS.as_list()})
         elif parsed.path == "/cache/stats":
             self.send_json(200, {"ok": True, "cache": CACHE.stats()})
+        elif parsed.path == "/route_status":
+            self.send_json(200, {
+                "ok": True,
+                "affected": DISPLAYED_ROUTE["affected"],
+                "reason": DISPLAYED_ROUTE["reason"],
+            })
         else:
             super().do_GET()
 
@@ -124,6 +147,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.handle_mark_condition(self.read_json_body())
         elif parsed.path == "/conditions/clear":
             self.handle_clear_conditions()
+        elif parsed.path == "/route_status/register":
+            self.handle_register_displayed_route(self.read_json_body())
         else:
             self.send_error(404, "No such endpoint")
 
@@ -304,14 +329,25 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         # edge_path-membership argument behind it and needs a full flush.
         # See route_cache.py / NOTES.md.
         if "relax" in effects:
-            dropped = CACHE.flush()
-            invalidation = {"mode": "flush", "entries_dropped": dropped}
+            dropped_keys = CACHE.flush()
+            invalidation = {"mode": "flush", "entries_dropped": len(dropped_keys)}
         else:
-            evicted = []
+            dropped_keys = []
             for u, v in targets:
-                evicted.extend(CACHE.invalidate_edge(u, v))
-            invalidation = {"mode": "precise", "entries_dropped": len(evicted),
+                dropped_keys.extend(CACHE.invalidate_edge(u, v))
+            invalidation = {"mode": "precise", "entries_dropped": len(dropped_keys),
                             "entries_kept": len(CACHE)}
+
+        # Checkpoint 6 auto-reroute: reuses dropped_keys, the exact eviction
+        # result computed above, to tell whether the route currently drawn
+        # on the map was one of the entries just dropped - no separate
+        # edge_path-membership check against the displayed route.
+        if DISPLAYED_ROUTE["key"] in dropped_keys:
+            DISPLAYED_ROUTE["affected"] = True
+            DISPLAYED_ROUTE["reason"] = kind
+            sys.stderr.write(
+                f"[route_status] displayed route {DISPLAYED_ROUTE['key']} affected by "
+                f"'{kind}' change - will auto-recompute on next poll\n")
 
         sys.stderr.write(
             f"[conditions] {kind} {targets} -> cache {invalidation['mode']}, "
@@ -335,13 +371,44 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         # closure may no longer be optimal, and those routes do not contain
         # the re-opened edge, so edge_path membership cannot find them.
         # A full flush is the only correct response here.
-        dropped = CACHE.flush()
-        sys.stderr.write(f"[conditions] cleared {had} condition(s) -> cache flushed, dropped {dropped}\n")
+        dropped_keys = CACHE.flush()
+        if DISPLAYED_ROUTE["key"] in dropped_keys:
+            DISPLAYED_ROUTE["affected"] = True
+            DISPLAYED_ROUTE["reason"] = "relaxed"
+            sys.stderr.write(
+                f"[route_status] displayed route {DISPLAYED_ROUTE['key']} affected by "
+                f"clearing conditions - will auto-recompute on next poll\n")
+        sys.stderr.write(f"[conditions] cleared {had} condition(s) -> cache flushed, dropped {len(dropped_keys)}\n")
         self.send_json(200, {
             "ok": True, "cleared": had,
-            "invalidation": {"mode": "flush", "entries_dropped": dropped},
+            "invalidation": {"mode": "flush", "entries_dropped": len(dropped_keys)},
             "conditions": [],
         })
+
+    def handle_register_displayed_route(self, body):
+        """Records which route is now on screen.
+
+        Called by the frontend right after every successful /compute +
+        redraw - a manual click and an auto-reroute's own recompute both
+        call this the same way. That's what resets `affected` back to
+        False once the screen matches current conditions again: the next
+        conditions change re-evaluates against whatever key was registered
+        most recently.
+        """
+        try:
+            slat = float(body["start_lat"])
+            slon = float(body["start_lon"])
+            elat = float(body["end_lat"])
+            elon = float(body["end_lon"])
+        except (KeyError, TypeError, ValueError):
+            self.send_error(400, "body must be JSON with numeric start_lat/start_lon/end_lat/end_lon")
+            return
+        start_node, _ = GRAPH.snap(slat, slon)
+        end_node, _ = GRAPH.snap(elat, elon)
+        DISPLAYED_ROUTE["key"] = (start_node, end_node, "both", "distance", 1)
+        DISPLAYED_ROUTE["affected"] = False
+        DISPLAYED_ROUTE["reason"] = None
+        self.send_json(200, {"ok": True})
 
     # ---------------- plumbing ----------------
 

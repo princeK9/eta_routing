@@ -94,6 +94,14 @@
     .cache-hit { background: #e9f9ef; border-left: 3px solid #1e9e50; color: #166534; }
     .cache-miss { background: #fff4e5; border-left: 3px solid #d97706; color: #92400e; }
 
+    /* Checkpoint 6: auto-reroute banner, styled distinctly from the cache
+       hit/miss colors above so it reads as "the route itself changed",
+       not as another cache-timing readout. */
+    .reroute-banner {
+      display: block; padding: 6px 10px; border-radius: 6px; font-size: 13px;
+      background: #eaf1ff; border-left: 3px solid #2563eb; color: #1d4ed8;
+    }
+
     pre#cacheStats {
       font-family: var(--font-mono); font-size: 11px;
       background: var(--bg-page); border: 1px solid var(--border);
@@ -134,6 +142,7 @@
       <p>Computes the A*/distance route for the two points above.</p>
       <p><button id="reload" disabled>Compute + show route</button></p>
       <p id="routeInfo"></p>
+      <p id="autoRerouteStatus"></p>
     </section>
 
     <section class="card">
@@ -223,6 +232,15 @@
     let endPoint = null;
     let demoRunning = false;
 
+    // Checkpoint 6: true only while the blue single-route line (section 2)
+    // is actually the thing on screen - flipped false by clearRouteLayers()
+    // (called by every button that redraws the map, including the demo and
+    // K-routes buttons) and true again only by loadRoute()'s own success
+    // path, so auto-reroute polling never fires while the user is looking
+    // at something else and never redraws over it.
+    let routeIsDisplayed = false;
+    let autoRerouteInFlight = false;
+
     // Four named layer groups are the map's entire mutable state, and
     // .clearLayers() on the relevant ones is the *only* way anything gets
     // removed - never a bare map.removeLayer() on a tracked variable. That's
@@ -251,6 +269,7 @@
       routeLayer.clearLayers();
       traceLayer.clearLayers();
       kRoutesLayer.clearLayers();
+      routeIsDisplayed = false;
     }
 
     function sleep(ms) {
@@ -324,6 +343,12 @@
       refreshCacheStats();
     }
 
+    // Returns true if a route was successfully computed and drawn, false
+    // otherwise - errors are still reported via routeInfo exactly as
+    // before, this never throws. The boolean return is what lets
+    // checkAutoReroute() below tell success from failure without changing
+    // this function's existing try/catch behavior for the plain button
+    // click, which ignores the return value entirely.
     async function loadRoute() {
       const infoEl = document.getElementById('routeInfo');
       const btn = document.getElementById('reload');
@@ -344,13 +369,17 @@
 
         if (!data.path_found) {
           infoEl.textContent = 'No path found between those two points.';
-          return;
+          return false;
         }
         const line = L.polyline(data.coordinates, { color: 'blue', weight: 4 }).addTo(routeLayer);
         map.fitBounds(line.getBounds(), { padding: [20, 20] });
         infoEl.textContent = `Route: ${data.coordinates.length} points, ${(data.distance_m / 1000).toFixed(2)} km`;
+        routeIsDisplayed = true;
+        await registerDisplayedRoute();
+        return true;
       } catch (err) {
         infoEl.textContent = err.message;
+        return false;
       } finally {
         btn.disabled = false;
       }
@@ -592,6 +621,86 @@
           `is scripts/dev_server.py running?`;
       }
     }
+
+    // --- Checkpoint 6: auto-reroute (lightweight polling) ---
+    //
+    // Polling, not a WebSocket push: every POLL_MS the frontend just asks
+    // "was the route I registered affected?" via GET /route_status, which
+    // the server answers from state it already updates on every conditions
+    // change (see DISPLAYED_ROUTE in dev_server.py) - no new matching logic
+    // on either side, just a cheap read of a boolean. See NOTES.md for why
+    // polling was enough here and what a push-based version would add.
+    const AUTO_REROUTE_POLL_MS = 2500;
+
+    const REROUTE_MESSAGES = {
+      closed:    { start: 'Route updated — a road ahead was closed. Recomputing...',
+                   done:  'Route updated — a road ahead was closed. New route shown.' },
+      congested: { start: 'Route updated — a road ahead became congested. Recomputing...',
+                   done:  'Route updated — a road ahead became congested. New route shown.' },
+      relaxed:   { start: 'Route updated — a road condition was cleared. Checking for a better route...',
+                   done:  'Route updated — a road condition was cleared. New route shown.' },
+    };
+    function rerouteMessage(reason, phase) {
+      const m = REROUTE_MESSAGES[reason] || {
+        start: 'Route updated — live conditions changed. Recomputing...',
+        done: 'Route updated — live conditions changed. New route shown.',
+      };
+      return m[phase];
+    }
+
+    // Tells the server which route is now on screen, so a later conditions
+    // change can tell whether it affects it - see handle_register_displayed_route
+    // in dev_server.py. Called from loadRoute()'s own success path, so both
+    // a manual click and an auto-reroute's own recompute register the same way.
+    async function registerDisplayedRoute() {
+      try {
+        await fetch('/route_status/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            start_lat: startPoint.lat, start_lon: startPoint.lng,
+            end_lat: endPoint.lat, end_lon: endPoint.lng,
+          }),
+        });
+      } catch (err) {
+        // Best-effort: if this fails, auto-reroute just won't fire until
+        // the next successful compute re-registers - a manual click still
+        // works regardless, this is purely additive.
+      }
+    }
+
+    async function checkAutoReroute() {
+      // Nothing displayed, or already mid-recompute from a previous tick -
+      // do nothing, per spec: only ever act on the route actually on screen.
+      if (autoRerouteInFlight || !routeIsDisplayed || !startPoint || !endPoint) return;
+
+      let body;
+      try {
+        const res = await fetch('/route_status', { cache: 'no-store' });
+        body = await res.json();
+      } catch (err) {
+        return; // server hiccup this tick - the next poll tries again
+      }
+      if (!body || !body.ok || !body.affected) return; // unaffected - do nothing
+
+      autoRerouteInFlight = true;
+      const banner = document.getElementById('autoRerouteStatus');
+      banner.classList.add('reroute-banner');
+      banner.textContent = rerouteMessage(body.reason, 'start');
+
+      const ok = await loadRoute();
+      banner.textContent = ok
+        ? rerouteMessage(body.reason, 'done')
+        : 'Route changed automatically, but the recompute failed - see status above.';
+
+      autoRerouteInFlight = false;
+      setTimeout(() => {
+        banner.textContent = '';
+        banner.classList.remove('reroute-banner');
+      }, 6000);
+    }
+
+    setInterval(checkAutoReroute, AUTO_REROUTE_POLL_MS);
 
     function drawConditions(conditions) {
       conditionsLayer.clearLayers();

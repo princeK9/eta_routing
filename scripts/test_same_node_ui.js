@@ -63,7 +63,12 @@ const sandbox = {
   L,
   document: { getElementById: getEl },
   fetch: (url, opts) => fetch(new URL(url, PAGE_URL).toString(), opts),
-  setTimeout, clearTimeout, console, URLSearchParams, JSON, Math, Date, Promise,
+  // setInterval/clearInterval added alongside the existing setTimeout pair
+  // specifically because checkpoint 6's auto-reroute poll loop (the first
+  // thing in this page to use setInterval) would otherwise fail to load in
+  // this VM at all - the same "test-stub gap, not a frontend bug" pattern
+  // as the classList/fetch-URL gaps documented in NOTES.md.
+  setTimeout, clearTimeout, setInterval, clearInterval, console, URLSearchParams, JSON, Math, Date, Promise,
 };
 sandbox.window = sandbox;
 vm.createContext(sandbox);

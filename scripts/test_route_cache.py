@@ -82,7 +82,7 @@ def test_flush():
     cache.put("A", entry_using([(1, 2)]))
     cache.put("B", entry_using([(3, 4)]))
     dropped = cache.flush()
-    check(dropped == 2, "reported how many entries it dropped")
+    check(dropped == ["A", "B"], "reported which entries it dropped (now keys, not just a count)")
     check(len(cache) == 0, "cache is empty after flush")
 
 

@@ -49,7 +49,10 @@ const sandbox = {
   L,
   document: { getElementById: getEl },
   fetch: (url, opts) => fetch(url.startsWith('http') ? url : `http://localhost:8765${url}`, opts),
-  setTimeout, clearTimeout, console, URLSearchParams, JSON, Math, Date, Promise,
+  // setInterval/clearInterval added alongside setTimeout - checkpoint 6's
+  // auto-reroute poll loop needs it just to let the page script load in
+  // this VM, same gap fixed the same way in test_same_node_ui.js.
+  setTimeout, clearTimeout, setInterval, clearInterval, console, URLSearchParams, JSON, Math, Date, Promise,
 };
 sandbox.window = sandbox;
 
@@ -103,4 +106,10 @@ try {
   console.log(`     entries before click: ${loadEntries}   after click: ${clickEntries}`);
   console.log(`     content changed on click: ${afterLoad !== afterClick}`);
   console.log(`     -> button ${afterLoad !== afterClick ? 'WORKS and is visibly different' : 'produced identical text'}`);
+
+  // Checkpoint 6's auto-reroute poll loop runs on a real setInterval in
+  // this sandbox now that one is provided (see above) - nothing here ever
+  // calls clearInterval, so without an explicit exit the process would
+  // hang past test completion waiting on that timer forever.
+  process.exit(0);
 })();

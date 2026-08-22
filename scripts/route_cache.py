@@ -183,11 +183,18 @@ class LruRouteCache:
         return doomed
 
     def flush(self):
-        """Drop everything. Used when conditions are relaxed (see above)."""
-        count = len(self._entries)
+        """Drop everything. Used when conditions are relaxed (see above).
+
+        Returns the list of dropped keys, not just a count, so a caller can
+        check whether one specific route was among them - checkpoint 6's
+        auto-reroute reuses this (and invalidate_edge's return above) to
+        tell whether the currently-displayed route was evicted, instead of
+        writing a second, separate edge_path-membership check.
+        """
+        keys = list(self._entries.keys())
         self._entries.clear()
         self.flushes += 1
-        return count
+        return keys
 
     def stats(self):
         total = self.hits + self.misses
