@@ -16,6 +16,19 @@ Interactive routing engine over real OpenStreetMap data for Bhubaneswar, India �
 
 The browser (Leaflet + vanilla JS, no framework) talks only to a single-threaded Python `dev_server.py`, which serves the static frontend and exposes `/compute`, `/compute_k`, `/conditions`, and `/cache/stats`. On each routing request it snaps the clicked lat/lon to a graph node itself, checks its own in-process LRU cache, and on a miss shells out to `route_engine.exe` as a one-shot subprocess — passing any live closed/congested edges — and reads back the JSON route it writes to disk. The split exists because the Python and C++ halves are genuinely separate toolchains that only need to agree on a file format (CSV in, JSON out): the C++ side stays a stateless, testable, one-shot computation engine, while all the mutable state (cache, live conditions, HTTP handling) lives in Python.
 
+```mermaid
+flowchart TD
+    A[Browser<br/>Leaflet + vanilla JS] -->|HTTP| B[Python dev_server.py<br/>single-threaded]
+    B -->|serves| C[Static frontend]
+    B -->|/compute, /compute_k,<br/>/conditions, /cache/stats| D{Cache check}
+    D -->|HIT| E[Return cached route]
+    D -->|MISS| F[Subprocess call]
+    F --> G[route_engine.exe<br/>C++, stateless, one-shot]
+    G -->|loads CSR graph,<br/>runs algorithm| H[Writes route JSON]
+    H -->|read back| B
+    B -->|response| A
+```
+
 ## Features
 
 - **Three search algorithms** — Dijkstra, A*, and bidirectional Dijkstra, all verified to agree on the same-cost optimal route
@@ -61,7 +74,7 @@ Two things are generated locally and are **not** in the repo: `data/*.csv` and `
 python scripts\export_osm.py
 
 # 2. Build the C++ engine
-cmake -S cpp -B cpp\build -G "MinGW Makefiles" -DCMAKE_CXX_COMPILER="C:\MinGW\bin\g++.exe" -DCMAKE_MAKE_PROGRAM="C:\MinGW\bin\mingw32-make.exe"
+cmake -S cpp -B cpp\build -G "MinGW Makefiles" -DCMAKE_CXX_COMPILER="C:\path\to\your\g++.exe" -DCMAKE_MAKE_PROGRAM="C:\path\to\your\mingw32-make.exe"
 cmake --build cpp\build
 
 # 3. Start the dev server
@@ -69,6 +82,8 @@ python scripts\dev_server.py
 
 # 4. Open http://localhost:8765
 ```
+
+Adjust these paths to wherever MinGW/g++ is installed on your machine.
 
 ### Changing the target city
 
@@ -78,5 +93,6 @@ Edit `PLACE_QUERY` in `scripts/export_osm.py` (e.g. `"Pune, India"`), then re-ru
 
 - **Not production-deployed.** `route_engine.exe` is a Windows binary; the dev server is deliberately single-threaded (the cache and live-conditions store aren't lock-protected); there's no authentication, authorization, or HTTPS.
 - **Traffic/closures are manually simulated**, not derived from live GPS or a real traffic feed — they're entered by clicking a road in "Edit mode."
-- **~24% of graph nodes have real isolation gaps** (60–250 m to their nearest road-connected neighbor), because the OSM export filter excludes `highway=service` roads (internal/campus/parking roads). Two clicks in such an area can snap to the same node — this is now caught and reported clearly rather than producing a fake route, but the underlying graph-coverage gap itself isn't fixed.
+- **~24% of graph nodes have real isolation gaps** (60–250 m to their nearest road-connected neighbor), because the OSM export filter excludes `highway=service` roads (internal/campus/parking roads). A concrete example: IIT Bhubaneswar's campus interior has a 2,002 m gap to the nearest graph node, since its internal roads are entirely untagged in the exported graph. Two clicks in such an area can snap to the same node — this is now caught and reported clearly rather than producing a fake route, but the underlying graph-coverage gap itself isn't fixed.
 - **Auto-reroute is polling-based** (~2.5s latency), not a WebSocket push, and only covers the single-route view (not the K-routes or algorithm-comparison views).
+- **Horizontal scaling was designed for, not built.** The current cache is an in-process Python dict — with multiple server instances, each would have its own separate cache, fragmenting hit rate. The documented fix is a shared external cache (e.g. Redis) plus multiple worker processes behind a load balancer. This is a design decision on record, not implemented, since the multi-instance problem it would solve doesn't exist yet at this project's scale.
