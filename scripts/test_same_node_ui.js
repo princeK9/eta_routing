@@ -18,7 +18,13 @@ function makeEl(id) {
   const classes = new Set();
   return {
     id, textContent: '', innerHTML: '',
-    value: id === 'kValue' ? '1' : (id === 'conditionKind' ? 'closed' : '3'),
+    // weightStrategy added alongside kValue/conditionKind for the same
+    // reason: an unrecognized id defaulting to '3' is a bare number, and
+    // currentWeight() (the first thing in this page to read #weightStrategy)
+    // sends that value straight to the server as `weight`, which correctly
+    // 400s it - a test-stub gap, not a frontend bug, same pattern as the
+    // classList/fetch-URL/setInterval gaps already documented in NOTES.md.
+    value: id === 'kValue' ? '1' : (id === 'conditionKind' ? 'closed' : (id === 'weightStrategy' ? 'distance' : '3')),
     checked: false, disabled: false, style: {},
     // Real DOM elements always have classList; this stub was missing it
     // until reportCacheResult() (which loadRoute() reaches via

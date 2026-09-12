@@ -9,3 +9,5 @@ NOTES.md
 data/*.csv
 frontend/route*.json
 frontend/steps_*.json
+
+preparation/

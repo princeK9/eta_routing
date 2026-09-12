@@ -15,14 +15,21 @@ The C++ engine is still a one-shot process - it is deliberately NOT turned
 into a persistent server. Everything stateful lives here.
 
 Endpoints
-    GET  /compute      ?start_lat&start_lon&end_lat&end_lon
-    GET  /compute_k    ?start_lat&start_lon&end_lat&end_lon&k&algo
+    GET  /compute      ?start_lat&start_lon&end_lat&end_lon&weight
+    GET  /compute_k    ?start_lat&start_lon&end_lat&end_lon&k&algo&weight
     GET  /conditions            -> current closed/congested set
     POST /conditions/mark       {lat, lon, kind: closed|congested, multiplier}
     POST /conditions/clear
     GET  /cache/stats           -> hit/miss/eviction counters
     GET  /route_status          -> was the displayed route affected by a conditions change since it was drawn
-    POST /route_status/register {start_lat, start_lon, end_lat, end_lon} -> records the currently displayed route
+    POST /route_status/register {start_lat, start_lon, end_lat, end_lon, weight} -> records the currently displayed route
+
+`weight` on /compute, /compute_k and /route_status/register is optional and
+defaults to "distance" (the only value before this change), so every
+existing caller that never sends it keeps behaving exactly as before. The
+only other accepted value is "time" - the engine's already-implemented,
+already-benchmarked time-based ETA strategy (see benchmark_results.txt),
+which was simply never wired into these endpoints or the UI until now.
 
 Checkpoint 6 adds auto-reroute: the frontend polls /route_status every few
 seconds, and /route_status answers by reusing the exact eviction result the
@@ -82,7 +89,8 @@ CACHE = LruRouteCache()
 # is flipped to True only by the cache-invalidation code below, reusing the
 # keys it already computed - not a second membership check against this
 # route's own edge path. "key" mirrors the cache key shape used for the
-# single-route /compute endpoint: (start_node, end_node, "both", "distance", 1).
+# single-route /compute endpoint: (start_node, end_node, "both", weight, 1) -
+# weight defaults to "distance" but is whatever the registering request used.
 DISPLAYED_ROUTE = {"key": None, "affected": False, "reason": None}
 
 
@@ -179,6 +187,30 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         end_node, _ = GRAPH.snap(end_lat, end_lon)
         return (start_lat, start_lon, end_lat, end_lon, start_node, end_node)
 
+    def parse_weight(self, params_or_body):
+        """Extracts and validates the optional weight strategy.
+
+        Shared by /compute, /compute_k and /route_status/register so the
+        cache key a compute writes and the key register() records for the
+        same query always agree - registering under the wrong weight would
+        make auto-reroute silently check the wrong cache entry. Defaults
+        to "distance" so every pre-existing caller that never sends this
+        param is completely unaffected.
+
+        Accepts either shape uniformly: urllib.parse.parse_qs's result
+        (query params) is *also* a plain dict, just one whose values are
+        single-element lists - "isinstance(..., dict)" can't tell it apart
+        from a JSON body dict, so this checks the value's own shape instead
+        (a caught, fixed bug: the first version of this used isinstance and
+        silently rejected every real query-string weight as invalid).
+        """
+        weight = params_or_body.get("weight", "distance")
+        if isinstance(weight, list):
+            weight = weight[0] if weight else "distance"
+        if weight not in ("distance", "time"):
+            return None
+        return weight
+
     def handle_compute(self, params):
         # Timer starts before snapping, not after: snapping is real work
         # this request pays for (~40k haversine evaluations per endpoint),
@@ -201,7 +233,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_json(422, self.same_node_response(slat, slon, elat, elon, start_node))
             return
 
-        key = (start_node, end_node, "both", "distance", 1)
+        weight = self.parse_weight(params)
+        if weight is None:
+            self.send_error(400, "weight must be 'distance' or 'time'")
+            return
+
+        key = (start_node, end_node, "both", weight, 1)
 
         cached = CACHE.get(key)
         if cached is not None:
@@ -215,7 +252,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return
 
         result = run_engine(
-            [str(slat), str(slon), str(elat), str(elon), "--algo=both", "--weight=distance"],
+            [str(slat), str(slon), str(elat), str(elon), "--algo=both", f"--weight={weight}"],
             ROUTE_JSON, STEPS_JSON,
         )
         if result.returncode != 0:
@@ -256,7 +293,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_error(400, "algo must be dijkstra, astar, or bidijkstra")
             return
 
-        key = (start_node, end_node, algo, "distance", k)
+        weight = self.parse_weight(params)
+        if weight is None:
+            self.send_error(400, "weight must be 'distance' or 'time'")
+            return
+
+        key = (start_node, end_node, algo, weight, k)
 
         cached = CACHE.get(key)
         if cached is not None:
@@ -270,7 +312,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return
 
         result = run_engine(
-            [str(slat), str(slon), str(elat), str(elon), f"--algo={algo}", "--weight=distance", f"--k={k}"],
+            [str(slat), str(slon), str(elat), str(elon), f"--algo={algo}", f"--weight={weight}", f"--k={k}"],
             ROUTE_K_JSON,
         )
         if result.returncode != 0:
@@ -403,9 +445,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except (KeyError, TypeError, ValueError):
             self.send_error(400, "body must be JSON with numeric start_lat/start_lon/end_lat/end_lon")
             return
+        weight = self.parse_weight(body)
+        if weight is None:
+            self.send_error(400, "weight must be 'distance' or 'time'")
+            return
         start_node, _ = GRAPH.snap(slat, slon)
         end_node, _ = GRAPH.snap(elat, elon)
-        DISPLAYED_ROUTE["key"] = (start_node, end_node, "both", "distance", 1)
+        DISPLAYED_ROUTE["key"] = (start_node, end_node, "both", weight, 1)
         DISPLAYED_ROUTE["affected"] = False
         DISPLAYED_ROUTE["reason"] = None
         self.send_json(200, {"ok": True})

@@ -139,7 +139,16 @@
 
     <section class="card">
       <h2><span class="step-num">2</span> Single route</h2>
-      <p>Computes the A*/distance route for the two points above.</p>
+      <p>Computes the A* route for the two points above, using whichever
+         weight strategy is selected below - the engine minimizes distance
+         or estimated travel time, not both at once.</p>
+      <p>
+        Weight:
+        <select id="weightStrategy">
+          <option value="distance" selected>Distance (km)</option>
+          <option value="time">Time (ETA)</option>
+        </select>
+      </p>
       <p><button id="reload" disabled>Compute + show route</button></p>
       <p id="routeInfo"></p>
       <p id="autoRerouteStatus"></p>
@@ -292,7 +301,7 @@
         const e = `${endPoint.lat.toFixed(6)} ${endPoint.lng.toFixed(6)}`;
         cmdEl.textContent =
           `cpp\\build\\route_engine.exe data\\nodes.csv data\\edges.csv ${s} ${e} frontend\\route.json ` +
-          `--algo=both --trace=frontend\\steps.json`;
+          `--algo=both --weight=${currentWeight()} --trace=frontend\\steps.json`;
       }
     }
 
@@ -327,11 +336,37 @@
     // steps_{dijkstra,astar,bidijkstra}.json fresh. Throws with a readable
     // message on failure (dev server not running, engine crashed, etc.) so
     // callers can show it.
+
+    // Reads the weight-strategy dropdown. A single source of truth shared
+    // by every caller (single route, K-routes, registration) so they can
+    // never disagree about which strategy was actually requested.
+    function currentWeight() {
+      return document.getElementById('weightStrategy').value;
+    }
+
+    // The engine only emits distance_m when weight=distance (see
+    // cpp/src/main.cpp: both write_route_json and write_multi_route_json
+    // guard it behind `if (weights.name() == "distance")`). A time-mode
+    // route/route-entry has only `cost`, in seconds. Branching on
+    // distance_m's presence - not on a separately-tracked "which mode am I
+    // in" flag - is what makes this correct even for stale JSON left over
+    // from a previous session's opposite mode, and is the one place this
+    // decision is made, so no caller can read distance_m off a time-mode
+    // response and render "NaN km" (the latent bug this closes).
+    function formatRouteCost(routeLike) {
+      if (routeLike.distance_m !== undefined) {
+        return `${(routeLike.distance_m / 1000).toFixed(2)} km`;
+      }
+      const totalMinutes = routeLike.cost / 60;
+      return totalMinutes < 1 ? `${Math.round(routeLike.cost)} sec` : `~${Math.round(totalMinutes)} min`;
+    }
+
     async function computeForCurrentPoints() {
       if (!startPoint || !endPoint) throw new Error('Pick a start and end point first.');
       const params = new URLSearchParams({
         start_lat: startPoint.lat, start_lon: startPoint.lng,
         end_lat: endPoint.lat, end_lon: endPoint.lng,
+        weight: currentWeight(),
       });
       const res = await fetch(`/compute?${params}`, { cache: 'no-store' });
       let body;
@@ -373,7 +408,7 @@
         }
         const line = L.polyline(data.coordinates, { color: 'blue', weight: 4 }).addTo(routeLayer);
         map.fitBounds(line.getBounds(), { padding: [20, 20] });
-        infoEl.textContent = `Route: ${data.coordinates.length} points, ${(data.distance_m / 1000).toFixed(2)} km`;
+        infoEl.textContent = `Route: ${data.coordinates.length} points, ${formatRouteCost(data)}`;
         routeIsDisplayed = true;
         await registerDisplayedRoute();
         return true;
@@ -517,7 +552,7 @@
         const params = new URLSearchParams({
           start_lat: startPoint.lat, start_lon: startPoint.lng,
           end_lat: endPoint.lat, end_lon: endPoint.lng,
-          k, algo: 'astar',
+          k, algo: 'astar', weight: currentWeight(),
         });
         const res = await fetch(`/compute_k?${params}`, { cache: 'no-store' });
         let body;
@@ -556,7 +591,7 @@
         infoEl.innerHTML = routes.map((r, i) => {
           const color = K_ROUTE_COLORS[i % K_ROUTE_COLORS.length];
           return `<span class="legend"><span style="background:${color}"></span>` +
-            `Route ${i + 1}: ${(r.distance_m / 1000).toFixed(2)} km</span>`;
+            `Route ${i + 1}: ${formatRouteCost(r)}</span>`;
         }).join('<br>');
 
         // k_requested/candidates_considered/candidates_rejected only exist
@@ -660,6 +695,7 @@
           body: JSON.stringify({
             start_lat: startPoint.lat, start_lon: startPoint.lng,
             end_lat: endPoint.lat, end_lon: endPoint.lng,
+            weight: currentWeight(),
           }),
         });
       } catch (err) {
@@ -808,7 +844,7 @@
           const line = L.polyline(data.coordinates, { color: 'blue', weight: 4 }).addTo(routeLayer);
           map.fitBounds(line.getBounds(), { padding: [20, 20] });
           document.getElementById('routeInfo').textContent =
-            `Route: ${data.coordinates.length} points, ${(data.distance_m / 1000).toFixed(2)} km (from a previous run)`;
+            `Route: ${data.coordinates.length} points, ${formatRouteCost(data)} (from a previous run)`;
         }
       } catch (err) { /* nothing on disk yet - fine */ }
     })();

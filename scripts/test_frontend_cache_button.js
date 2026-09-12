@@ -21,7 +21,10 @@ function makeEl(id) {
     id,
     textContent: '',
     innerHTML: '',
-    value: id === 'kValue' ? '1' : (id === 'conditionKind' ? 'closed' : '3'),
+    // weightStrategy defaults to 'distance', same fix and same reason as
+    // test_same_node_ui.js - an unrecognized id otherwise defaults to '3',
+    // and currentWeight() would send that straight to the server.
+    value: id === 'kValue' ? '1' : (id === 'conditionKind' ? 'closed' : (id === 'weightStrategy' ? 'distance' : '3')),
     checked: false,
     disabled: false,
     style: {},
